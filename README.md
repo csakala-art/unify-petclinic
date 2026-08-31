@@ -1,4 +1,19 @@
+# Spring PetClinic Sample Application — SLSA L1 container lab
+
+This repository is a fork of [cdbell2-cmd/spring-petclinic](https://github.com/cdbell2-cmd/spring-petclinic) used as a **working lab** for Proofpoint SLSA Level 1.
+
+**Start here:** [SLSA-L1-POC.md](SLSA-L1-POC.md)
+
+- Provenance subject is the **Jib image digest** (`target/jib-image.digest`), not the JAR.
+- No Docker daemon: the Jenkinsfile runs `jib:buildTar`.
+- Test controller: public `maven:3.9-eclipse-temurin-17`. Inside Proofpoint: switch Maven and Jib `from` images to `repocache.nonprod.ppops.net/docker/...`.
+
+Upstream Spring PetClinic docs follow.
+
+---
+
 # Spring PetClinic Sample Application [![Build Status](https://github.com/spring-projects/spring-petclinic/actions/workflows/maven-build.yml/badge.svg)](https://github.com/spring-projects/spring-petclinic/actions/workflows/maven-build.yml)[![Build Status](https://github.com/spring-projects/spring-petclinic/actions/workflows/gradle-build.yml/badge.svg)](https://github.com/spring-projects/spring-petclinic/actions/workflows/gradle-build.yml)
+
 
 [![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/spring-projects/spring-petclinic) [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://github.com/codespaces/new?hide_repo_select=true&ref=main&repo=7517918)
 

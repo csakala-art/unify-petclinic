@@ -1,28 +1,32 @@
-# SLSA Level 1 Implementation POC — Proofpoint
+# SLSA Level 1 Implementation POC — Proofpoint (container / Jib)
 
 Read `SLSA-Feynman.md` first if you have not. SLSA Level 2 is covered separately in `SLSA-L2-POC-Proofpoint.md` — do not start it until every item in the L1 checklist at the bottom of this document is green.
+
+This fork adapts the original JAR lab so **provenance receipts the container image**, which is how Proofpoint Java services typically publish (Jib, no local Docker daemon).
+
+The community **SLSA Provenance Attestation** plugin (`slsa`) remains a valid L1 tool **when the shipped artifact is a file on disk** (a JAR). It is the **wrong** tool for Jib: `provenanceRecorder` hashes file bytes. Pointing it at `target/jib-image.digest` would attest “hash of a short text file,” not the **image manifest digest** Jib wrote inside that file.
 
 ---
 
 ## How this POC matches the Proofpoint environment
 
-Everything below was verified from the two support bundles (controllers `buildrel` and `cloud15`, captured 2026-08-25). The lab adds exactly one plugin — the **SLSA Provenance Attestation** plugin (`slsa`, https://plugins.jenkins.io/slsa/), installed in Lab 3 — everything else is already in place.
+Everything below was verified from the two support bundles (controllers `buildrel` and `cloud15`, captured 2026-08-25). This container lab does **not** install the `slsa` plugin. Pipeline Groovy (`readFile` / `writeFile` / `archiveArtifacts`) is already on the controllers.
 
 | Environment fact (from support bundles) | How the lab uses it |
 |---|---|
 | Jobs are overwhelmingly Pipeline: 5,662 `WorkflowJob` + 90 Multibranch on `buildrel`; 1,462 + 151 on `cloud15` | POC is a Multibranch Pipeline with a source-controlled Jenkinsfile |
 | GitHub Branch Source `1925.x`, `cloudbees-github-reporting`, plus Bitbucket Server integration installed | Lab 1 uses GitHub branch source; a Bitbucket note is included |
-| Two agent models: Kubernetes pods (kubernetes plugin `4419.x`, namespace `cloudbees-agents`, service account `jenkins-agents`) **and** EC2 cloud `ec2-instances-cloud` (m6a.large / m5a.2xlarge / m5a.4xlarge, label-routed) | Primary Jenkinsfile uses a Kubernetes pod agent; §2.5 gives the EC2 label variant. The provenance stage is written to run on either |
-| Default pod agent image is pulled through the internal mirror `repocache.nonprod.ppops.net/docker/...` (internal-only hostname) | The lab Jenkinsfile defaults to the public image so it runs anywhere; when running inside Proofpoint, switch it to the `repocache` mirror path so pulls follow their registry controls |
-| The `slsa` plugin is **not** in either bundle's plugin list | Lab 3 installs it (v`40.v733b_0005fa_fd`, min Jenkins 2.361.4 — compatible with 2.541.1.35570). It is a community plugin outside the CloudBees Assurance Program: fine to install ad-hoc for the POC, but the fleet rollout must add it to the plugin catalog in the CJOC CasC bundle |
-| `pipeline-utility-steps 2.20.0` installed | Provenance generation is handled by the SLSA plugin; `sha256()`/`findFiles` remain available for ad-hoc digest cross-checks |
-| `artifact-manager-s3 962.x` installed; S3 blob store configured for bucket `nonprod.cloudbees-ci-cache.pfpt` — but the artifact-manager factory list in the bundle snapshot is **empty** | `archiveArtifacts` + `fingerprint: true` works identically whether artifacts land on controller disk or in S3. §3.5 tells you how to confirm which one is active |
-| Fingerprint storage: local file storage (default), cleanup enabled | Fingerprints UI is used as the L1 audit trail |
-| CasC bundles from CJOC (`core.casc.config.bundle`), RBAC (`nectar-rbac`), Folders Plus | Not needed for L1; used heavily in the L2 POC and the fleet-rollout runbook |
+| Two agent models: Kubernetes pods (kubernetes plugin `4419.x`, namespace `cloudbees-agents`, service account `jenkins-agents`) **and** EC2 cloud `ec2-instances-cloud` | Primary Jenkinsfile uses a Kubernetes pod agent; §2.5 gives the EC2 label variant. The provenance stage uses Jenkins steps (`readFile`, `writeFile`, `archiveArtifacts`) so it runs on either |
+| Default pod agent image is pulled through the internal mirror `repocache.nonprod.ppops.net/docker/...` | The lab Jenkinsfile defaults to the public image so it runs anywhere; when running inside Proofpoint, switch it to the `repocache` mirror path |
+| The `slsa` plugin is **not** in either bundle's plugin list | Leave it uninstalled for this container lab. Use it later only for JAR-only pipelines |
+| `pipeline-utility-steps 2.20.0` installed | Available for ad-hoc digest checks; Lab 3 uses built-in `readFile` |
+| `artifact-manager-s3 962.x` installed; S3 blob store configured but the artifact-manager factory list in the bundle snapshot is **empty** | `archiveArtifacts` + `fingerprint: true` works on controller disk or S3. §3.5 tells you how to confirm which one is active |
+| Fingerprint storage: local file storage (default), cleanup enabled | Fingerprints UI is the L1 audit trail for `provenance-l1.json` and `jib-image.digest` |
+| Implicit shared library `pfpt-ci-pipeline` (`PFPT-Internal/ieng-pfpt-ci-pipeline`) | This lab keeps steps in the Jenkinsfile so you can see them. Copy-paste `vars/recordJibSlsaL1` snippet at the bottom when you fold this into the library |
 
-> **Note on anonymized names:** support bundles anonymize job names, labels, and agent names (e.g. `label_pleasant_rugby`). Where the lab says *"your EC2 label"* or *"your team folder"*, substitute the real value from the controller UI.
+> **Note on anonymized names:** support bundles anonymize job names, labels, and agent names. Where the lab says *"your EC2 label"* or *"your team folder"*, substitute the real value from the controller UI.
 
-> **Image sourcing:** the lab Jenkinsfile defaults to the public `maven:3.9-eclipse-temurin-17` (Docker Hub) so it runs on any test controller. `repocache.nonprod.ppops.net` is Proofpoint's **internal-only** mirror — it does not resolve outside their network. When delivering inside Proofpoint, switch the image to the `repocache` path per the note under the Jenkinsfile. Everything else in the lab is environment-neutral.
+> **Image sourcing:** the lab Jenkinsfile defaults to the public `maven:3.9-eclipse-temurin-17` (Docker Hub) so it runs on any test controller. `repocache.nonprod.ppops.net` is Proofpoint's **internal-only** mirror. When delivering inside Proofpoint, switch the Maven **and** Jib `from` image to `repocache` paths. Jib `from` in this `pom.xml` is `eclipse-temurin:17-jre` (Docker Hub) for the same reason.
 
 ---
 
@@ -39,27 +43,29 @@ No signing, no tamper-proofing — that is Level 2. L1 is the auditable paper tr
 ```
 Lab 1:  Create the Multibranch Pipeline job                     (~15 min)
 Lab 2:  Base Jenkinsfile — Maven build + test                   (~20 min)
-Lab 3:  L1 provenance — SLSA plugin attestation + SBOM          (~25 min)
+Lab 3:  L1 provenance — Jib digest + provenance-l1.json         (~25 min)
 ```
 
 ---
 
 ## Pre-lab — repo and access
 
-1. Fork https://github.com/spring-projects/spring-petclinic (or pick a real Proofpoint Maven service — any repo with `pom.xml` + `mvnw` works; adjust artifact paths accordingly).
+1. Use this fork (or fork it again): the GitHub repo that contains this `Jenkinsfile` and `pom.xml` Jib config. A stock Spring PetClinic tree without Jib will not write `target/jib-image.digest`.
 2. Confirm you can log in to the agreed nonprod controller (SAML SSO) and can create items in a test folder.
-3. (Proofpoint delivery only) Confirm build agents can reach the internal registry mirror `repocache.nonprod.ppops.net` — already the default for pod agents. On a test controller outside Proofpoint, skip this; the lab uses public images.
+3. (Proofpoint delivery only) Confirm build agents can reach the internal registry mirror `repocache.nonprod.ppops.net`. On a test controller outside Proofpoint, skip this; the lab uses public images.
 
-After `./mvnw package` the example app produces:
+After `./mvnw -B -DskipTests package jib:buildTar` the example app produces:
 
 ```
-target/spring-petclinic-4.0.0-SNAPSHOT.jar   ← the artifact we fingerprint
-target/bom.json / target/bom.xml             ← CycloneDX SBOM
+target/jib-image.digest   ← image manifest digest (sha256:<64 hex>) — L1 subject
+target/jib-image.tar      ← image tarball (not archived by default; large)
+target/bom.json / target/bom.xml   ← CycloneDX SBOM
 ```
 
-> For Proofpoint's own services whose poms do **not** declare the CycloneDX plugin, no pom change is needed — invoke it by full coordinates:
+The lab uses **`jib:buildTar`** so a registry is not required. When Proofpoint already pushes with Jib, swap that goal for `jib:build` (same digest file). Do not use `jib:dockerBuild` — that needs a Docker daemon, which this pattern avoids.
+
+> For Proofpoint services whose poms do **not** declare CycloneDX, invoke it by full coordinates:
 > `./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.8.0:makeAggregateBom`
-> (the plugin resolves through the existing Artifactory/`repocache` Maven mirror).
 
 ---
 
@@ -110,7 +116,6 @@ spec:
   - name: maven
     # Public image (Docker Hub). Inside Proofpoint, switch to the internal
     # mirror: repocache.nonprod.ppops.net/docker/maven:3.9-eclipse-temurin-17
-    # (repocache is internal-only; it does not resolve outside their network)
     image: maven:3.9-eclipse-temurin-17
     command: [sleep, infinity]
     env:
@@ -147,8 +152,6 @@ spec:
         stage('Build') {
             steps {
                 container('maven') {
-                    // makeAggregateBom invoked explicitly so it works with or
-                    // without the plugin being declared in the app's pom.xml
                     sh './mvnw -B -DskipTests package org.cyclonedx:cyclonedx-maven-plugin:2.8.0:makeAggregateBom'
                 }
             }
@@ -178,8 +181,8 @@ spec:
 
 Notes on why this differs from a generic lab Jenkinsfile:
 
-- **Image source** — the lab default is the public `maven:3.9-eclipse-temurin-17` so the pipeline runs anywhere. When running inside Proofpoint, switch to `repocache.nonprod.ppops.net/docker/maven:3.9-eclipse-temurin-17` — the same mirror path the controller already uses for its default agent image (`.../docker/cloudbees/cloudbees-core-agent`). Docker Hub pulls may be blocked there and would bypass Proofpoint's registry controls; conversely, `repocache` is internal-only and unreachable from any other network.
-- **No `namespace` or `serviceAccountName` in the pod YAML — deliberately.** The Proofpoint controllers already inject the right defaults via JVM flags (`-Dcom.cloudbees.jenkins.plugins.kube.NamespaceFilter.defaultNamespace=cloudbees-agents`, `ServiceAccountFilter.defaultServiceAccount=jenkins-agents`), so pods land in `cloudbees-agents` as `jenkins-agents` without the Jenkinsfile saying so. Hardcoding a namespace makes the pipeline fail with `pods is forbidden ... 403` on any controller whose service account has RBAC in a different namespace — omitting it keeps the same Jenkinsfile working on all ~70 Proofpoint controllers *and* on scratch/test clusters.
+- **Image source** — the lab default is the public `maven:3.9-eclipse-temurin-17` so the pipeline runs anywhere. When running inside Proofpoint, switch to `repocache.nonprod.ppops.net/docker/maven:3.9-eclipse-temurin-17`. Docker Hub pulls may be blocked there; `repocache` is internal-only.
+- **No `namespace` or `serviceAccountName` in the pod YAML — deliberately.** The Proofpoint controllers inject `cloudbees-agents` / `jenkins-agents` via JVM flags. Hardcoding a namespace makes the pipeline fail with `pods is forbidden ... 403` on controllers whose service account has RBAC elsewhere.
 
 ### 2.5 Variant — EC2 agent
 
@@ -189,7 +192,7 @@ Many Proofpoint workloads run on the `ec2-instances-cloud` EC2 templates rather 
 agent { label 'YOUR-EC2-TEMPLATE-LABEL' }   // e.g. the m6a.large standard-network label
 ```
 
-Requirements on the AMI (`ami-0408a16db20ae3c94` family): Java 17+ available for `./mvnw`. Everything in Lab 3 is agent-agnostic — it uses Jenkins steps (`provenanceRecorder`, `archiveArtifacts`), not shell utilities, precisely so it behaves identically on pods and EC2.
+Requirements on the AMI: Java 17+ for `./mvnw`. Lab 3 uses Jenkins steps (`readFile`, `writeFile`, `archiveArtifacts`), not `sha256sum` or `cosign`, so it behaves the same on pods and EC2.
 
 ### 2.6 Commit, push, build
 
@@ -207,201 +210,84 @@ Green build with Checkout / Build / Test stages; log shows the pod (or EC2 agent
 
 ---
 
-## Lab 3 — SLSA Level 1 provenance (SLSA Provenance Attestation plugin)
+## Lab 3 — SLSA Level 1 provenance (Jib image digest)
 
-**Goal:** Every build archives a fingerprinted JAR, an SBOM, and a machine-generated in-toto/SLSA provenance attestation tying artifact digest → commit → builder → build run. Provenance is produced by the Jenkins **SLSA Provenance Attestation** plugin, not hand-rolled JSON — the format is standard, and there is no string-templating to get wrong.
+**Goal:** Every build archives a fingerprinted Jib digest file, an SBOM, and a provenance JSON whose `subject.digest.sha256` **equals the hex inside** `target/jib-image.digest` (Jib’s image manifest digest), plus git commit and builder URLs.
 
-### 3.0 Install the SLSA Provenance Attestation plugin
+### Why not `provenanceRecorder` on the digest file
 
-1. On the controller: **Manage Jenkins → Plugins → Available plugins** → search **SLSA** → install **SLSA Provenance Attestation** (`slsa`). No restart required.
-2. Version at time of writing: `40.v733b_0005fa_fd`; requires Jenkins ≥ 2.361.4 — satisfied by the fleet's 2.541.1.35570.
+Jib writes `target/jib-image.digest` as a single line: `sha256:` plus 64 hex characters. That **line is the image digest**.
 
-> **CAP note:** this is a community plugin outside the CloudBees Assurance Program, and the controllers are CasC-managed with the non-CAP plugin monitor active. Ad-hoc install is fine for the POC; the fleet rollout must add `slsa` to the **plugin catalog** in the CJOC CasC bundle so Beekeeper does not flag or remove it (see the L2 POC appendix).
+The `slsa` plugin’s `provenanceRecorder` hashes **whatever files match `artifactFilter`**. If you set `artifactFilter: 'target/jib-image.digest'`, the attestation subject is SHA-256 of those **file bytes** (a hash of the text `sha256:abcd…`), which is a different value from `abcd…`. Auditors comparing provenance to `image@sha256:…` in the registry would see a mismatch.
 
-What the plugin emits (verified from the plugin source, not just its docs):
+Correct approach: **read** the file, strip the `sha256:` prefix, put that hex on `subject.digest.sha256`. Set `subject.name` from the image reference you already passed to Jib (`JIB_IMAGE` / `pom.xml` `<jib.to.image>`). The digest file does not include the image name ([Jib issue 4348](https://github.com/GoogleContainerTools/jib/issues/4348)).
 
-- One in-toto attestation per matched artifact, written as `<artifact-name>.intoto.jsonl` into the target directory (`multiple.intoto.jsonl` if several artifacts match one attestation).
-- The predicate is **SLSA Provenance v0.2**, containing: `subject[]` with the artifact's SHA-256; `invocation.configSource` = git repo URL + commit digest + job name as entryPoint; `invocation.environment` = `job_url`, `build_url`, `node_name`; `materials` = the source repo at the built commit; `metadata` = build number as `buildInvocationId` plus build start/finish timestamps.
-- Known limitations: only Git SCM is supported (fine — the POC checks out over git from GitHub/Bitbucket), executed build steps are not recorded in the attestation, and **the plugin does not sign attestations**. Signing is exactly what the L2 POC adds with cosign.
+JAR-only services can still use `provenanceRecorder` on `target/*.jar`. Do not mix that glob with a Jib image publish.
 
-### 3.1 Add the Archive stage
+### 3.1 Jib in the pom (already in this fork)
 
-After `Test`:
+`jib-maven-plugin` `3.5.2` is configured with `<to><image>${jib.to.image}</image></to>`. It is **not** bound to `package`, so a normal `./mvnw package` does not push. The pipeline calls `jib:buildTar` explicitly.
 
-```groovy
-stage('Archive') {
-    steps {
-        // fingerprint: true records the artifact hash in the Jenkins
-        // fingerprint database — traceable across jobs via copyartifact
-        archiveArtifacts artifacts: 'target/spring-petclinic-*.jar', fingerprint: true
-        archiveArtifacts artifacts: 'target/bom.json, target/bom.xml', allowEmptyArchive: true
-    }
-}
-```
+Inside Proofpoint, change the Jib `<from><image>` (and the Maven agent image) to `repocache.nonprod.ppops.net/docker/...` paths. To push to their registry instead of a tarball, replace `jib:buildTar` with `jib:build` and set `-Djib.to.image=registry.example/…`.
 
-### 3.2 Add the provenance stage
+### 3.2 Add Jib to Build; archive the digest; write provenance
 
-`provenanceRecorder` is a regular pipeline step (the plugin implements `SimpleBuildStep`), so it runs as its own stage on either agent type — no container wrapper, no shell utilities, identical on pods and EC2:
+The repo-root `Jenkinsfile` is the Lab 3 deliverable. Differences from Lab 2:
+
+- `environment { JIB_IMAGE = 'spring-petclinic:4.0.0-SNAPSHOT' }` — must match the pom property.
+- Build also runs `jib:buildTar`.
+- Archive fingerprints `target/jib-image.digest` (not the JAR as the L1 subject).
+- Provenance stage reads that file, writes `provenance-l1.json` at the **workspace root** (writable by the `jnlp` user; `target/` is often root-owned on pod agents).
+
+See the complete file in §3.3 (also `Jenkinsfile` in this repository).
+
+### 3.3 Complete Jenkinsfile after Lab 3
+
+Use the `Jenkinsfile` at the repository root. The provenance stage is:
 
 ```groovy
 stage('SLSA L1 Provenance') {
     steps {
         script {
-            // provenanceRecorder generates attestations only when the build
-            // result is already SUCCESS; mid-pipeline it is still null, so
-            // set it explicitly (Jenkins only allows it to worsen afterward)
-            currentBuild.result = 'SUCCESS'
+            def digestPath = 'target/jib-image.digest'
+            if (!fileExists(digestPath)) {
+                error("Jib digest file missing: ${digestPath}. The Build stage must run jib:buildTar or jib:build first.")
+            }
+            def raw = readFile(digestPath).trim()
+            if (!(raw ==~ /sha256:[a-fA-F0-9]{64}/)) {
+                error("Unexpected Jib digest (want sha256: plus 64 hex chars): '${raw}'")
+            }
+            def imageSha256 = raw.substring('sha256:'.length()).toLowerCase()
+            // ... write provenance-l1.json with subject.digest.sha256 = imageSha256
         }
-        // targetDirectory is workspace-root 'slsa', NOT 'target/slsa' — see below
-        provenanceRecorder artifactFilter: 'target/spring-petclinic-*.jar',
-                           targetDirectory: 'slsa'
-        archiveArtifacts artifacts: 'slsa/*.intoto.jsonl', fingerprint: true
+        archiveArtifacts artifacts: 'provenance-l1.json', fingerprint: true
     }
 }
 ```
 
-Three placement rules, all verified against the plugin source or hit in dry runs:
-
-- **The `currentBuild.result = 'SUCCESS'` line is required.** The plugin's `perform()` begins with `if (run.getResult() != Result.SUCCESS) { skip }`, and in a running Pipeline `getResult()` stays `null` until the build finishes — so without the explicit set, the step logs `[slsa] - build not successful, not generating provenance attestations` and writes nothing. Setting SUCCESS mid-build is safe: Jenkins only permits the result to get worse afterward, so later failures still fail the build.
-- **`targetDirectory` must be a workspace-root path (`slsa`), not under `target/`.** The recorder executes in the jnlp container as user `jenkins` (uid 1000), while the maven container runs as root and created `target/` root-owned — the plugin's `mkdirs` under `target/` then fails with `AccessDeniedException`. The workspace root is owned by the jnlp user, so `slsa/` is always writable. (Reading the root-owned JAR works — root's files are world-readable.)
-- The stage must run **after** `Build` (and after `Archive` in this layout) — the JAR has to exist in the workspace for the `artifactFilter` glob to match.
-
-### 3.3 Your complete Jenkinsfile after Lab 3
-
-This is the full file — Lab 2 base plus the two Lab 3 stages. It is the L1 deliverable:
-
-```groovy
-pipeline {
-    agent {
-        kubernetes {
-            yaml """
-apiVersion: v1
-kind: Pod
-spec:
-  containers:
-  - name: maven
-    # Public image (Docker Hub). Inside Proofpoint, switch to the internal
-    # mirror: repocache.nonprod.ppops.net/docker/maven:3.9-eclipse-temurin-17
-    # (repocache is internal-only; it does not resolve outside their network)
-    image: maven:3.9-eclipse-temurin-17
-    command: [sleep, infinity]
-    env:
-    - name: MAVEN_OPTS
-      value: "-Xmx512m"
-    volumeMounts:
-    - name: maven-cache
-      mountPath: /root/.m2
-  volumes:
-  - name: maven-cache
-    emptyDir: {}
-"""
-        }
-    }
-
-    options {
-        timeout(time: 30, unit: 'MINUTES')
-        disableConcurrentBuilds()
-    }
-
-    stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-                script {
-                    env.GIT_COMMIT_SHA = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
-                    env.GIT_REPO_URL   = sh(script: 'git remote get-url origin', returnStdout: true).trim()
-                    echo "Building commit: ${env.GIT_COMMIT_SHA}"
-                }
-            }
-        }
-
-        stage('Build') {
-            steps {
-                container('maven') {
-                    // makeAggregateBom invoked explicitly so it works with or
-                    // without the plugin being declared in the app's pom.xml
-                    sh './mvnw -B -DskipTests package org.cyclonedx:cyclonedx-maven-plugin:2.8.0:makeAggregateBom'
-                }
-            }
-        }
-
-        stage('Test') {
-            steps {
-                container('maven') {
-                    sh './mvnw -B test'
-                }
-            }
-            post {
-                always {
-                    junit testResults: 'target/surefire-reports/*.xml', allowEmptyResults: true
-                }
-            }
-        }
-
-        stage('Archive') {
-            steps {
-                // fingerprint: true records the artifact hash in the Jenkins
-                // fingerprint database — traceable across jobs via copyartifact
-                archiveArtifacts artifacts: 'target/spring-petclinic-*.jar', fingerprint: true
-                archiveArtifacts artifacts: 'target/bom.json, target/bom.xml', allowEmptyArchive: true
-            }
-        }
-
-        stage('SLSA L1 Provenance') {
-            steps {
-                script {
-                    // provenanceRecorder generates attestations only when the build
-                    // result is already SUCCESS; mid-pipeline it is still null, so
-                    // set it explicitly (Jenkins only allows it to worsen afterward)
-                    currentBuild.result = 'SUCCESS'
-                }
-                // targetDirectory is workspace-root 'slsa', NOT 'target/slsa':
-                // the recorder runs in the jnlp container as user 'jenkins',
-                // while the maven container created target/ as root — mkdirs
-                // under target/ fails with AccessDeniedException
-                provenanceRecorder artifactFilter: 'target/spring-petclinic-*.jar',
-                                   targetDirectory: 'slsa'
-                archiveArtifacts artifacts: 'slsa/*.intoto.jsonl', fingerprint: true
-            }
-        }
-
-    }
-
-    post {
-        success { echo "SLSA L1 build complete: ${env.JOB_NAME} #${env.BUILD_NUMBER}" }
-        failure { echo "Build failed: check the stage logs above" }
-    }
-}
-```
+`writeFile` must stay at workspace-root `provenance-l1.json`, not under `target/` — same uid rule as the old `slsa/` directory: Maven runs as root, `jnlp` is `jenkins`.
 
 ### 3.4 Commit, push, run
 
 ```bash
-git add Jenkinsfile
-git commit -m "SLSA L1: fingerprinting, SBOM, plugin-generated provenance attestation"
+git add Jenkinsfile pom.xml SLSA-L1-POC.md
+git commit -m "SLSA L1: Jib digest provenance (container subject)"
 git push origin main
 ```
 
 ### 3.5 Inspect the results
 
-1. **Archived Artifacts** on the build page: the JAR, `bom.json`, `bom.xml`, and `spring-petclinic-4.0.0-SNAPSHOT.jar.intoto.jsonl`.
-   - *Where did they land?* The `artifact-manager-s3` plugin is installed and the blob store points at the `nonprod.cloudbees-ci-cache.pfpt` S3 bucket, but the bundle snapshot shows **no active artifact-manager factory**, which means artifacts are currently written to controller disk. Check **Manage Jenkins → System → Artifact Management for Builds**. Either backend satisfies L1; if Proofpoint enables S3 later, nothing in this pipeline changes.
-2. Download the `.intoto.jsonl` file and inspect it. It is an in-toto envelope whose `payload` is the base64-encoded provenance statement — decode it:
-
-   ```bash
-   jq -r '.payload' spring-petclinic-4.0.0-SNAPSHOT.jar.intoto.jsonl | base64 -d | jq .
-   ```
-
-   (If the file already shows plain JSON with a top-level `predicate`, just `jq .` it directly.) Confirm:
-   - `subject[0].digest.sha256` is present,
-   - `predicate.invocation.configSource.digest` matches the commit SHA in the build log,
-   - `predicate.invocation.environment.build_url` points at this exact run.
-3. **Fingerprints** in the build's left nav — the JAR and the attestation both appear. This database is what lets an auditor answer "which build produced this exact JAR?" months later.
+1. **Archived Artifacts** on the build page: `jib-image.digest`, `bom.json` / `bom.xml`, and `provenance-l1.json`.
+   - Check **Manage Jenkins → System → Artifact Management for Builds** for disk vs S3. Either backend satisfies L1.
+2. Open `provenance-l1.json` and `jib-image.digest`. Confirm:
+   - `subject.digest.sha256` equals the 64 hex characters **after** `sha256:` in the digest file (not a hash of the digest file),
+   - `source.commit` matches `GIT_COMMIT_SHA` in the build log,
+   - `builder.build_url` points at this run.
+3. **Fingerprints** in the build’s left nav — the digest file and `provenance-l1.json` both appear.
 
 ### Expected result
 
-Five-stage green build. Every subsequent build of any branch automatically produces artifact + SBOM + a standards-format SLSA v0.2 attestation, with no human step in the loop.
+Five-stage green build. Every subsequent build produces image digest + SBOM + provenance JSON with no human step in the loop.
 
 ---
 
@@ -409,53 +295,86 @@ Five-stage green build. Every subsequent build of any branch automatically produ
 
 - [ ] Jenkinsfile in SCM; no UI-defined build steps (Lab 2)
 - [ ] Build runs on the CloudBees CI controller via pod or EC2 agent — never locally (Lab 2)
-- [ ] JAR archived with `fingerprint: true` (Lab 3)
+- [ ] Jib ran without a Docker daemon (`jib:buildTar` or `jib:build`) (Lab 3)
+- [ ] `target/jib-image.digest` archived with `fingerprint: true` (Lab 3)
 - [ ] CycloneDX SBOM (`bom.json`/`bom.xml`) archived per build (Lab 3)
-- [ ] SLSA Provenance Attestation plugin installed; `.intoto.jsonl` (SLSA v0.2 predicate) archived per build with commit SHA + artifact SHA-256 (Lab 3)
+- [ ] `provenance-l1.json` archived and fingerprinted; `subject.digest.sha256` matches the hex inside the digest file; git commit + `BUILD_URL` present (Lab 3)
 - [ ] Fingerprints visible in the Jenkins Fingerprints UI (Lab 3)
 - [ ] Verified whether archived artifacts land on controller disk or the S3 bucket (§3.5)
 
-**Definition of done for the proposal milestone:** one Proofpoint Maven pipeline on the agreed controller runs this end-to-end, and the team can locate the provenance for any given build in under a minute.
+**Definition of done for the proposal milestone:** one Proofpoint-shaped Maven/Jib pipeline on the agreed controller runs this end-to-end, and the team can locate the provenance for any given build in under a minute.
 
-Proceed to `SLSA-L2-POC-Proofpoint.md` (target: September 22) to add signing.
+Proceed to `SLSA-L2-POC-Proofpoint.md` (target: September 22) to add signing. Cosign must be **baked into the agent image** (air-gapped / `repocache`); do not download it during the build. Use `--tlog-upload=false` until a self-hosted transparency log exists.
+
+---
+
+## Copy-paste for `pfpt-ci-pipeline` (later)
+
+Not required to finish this lab. After Jib publish, a shared-library vars step can wrap the same parse/write/archive logic:
+
+```groovy
+// vars/recordJibSlsaL1.groovy
+def call(Map cfg = [:]) {
+    def digestPath = cfg.digestPath ?: 'target/jib-image.digest'
+    def imageName = cfg.imageName ?: error('recordJibSlsaL1: imageName is required')
+    if (!fileExists(digestPath)) {
+        if (cfg.skipIfMissing) {
+            echo "recordJibSlsaL1: skip, missing ${digestPath}"
+            return
+        }
+        error("recordJibSlsaL1: missing ${digestPath}")
+    }
+    def raw = readFile(digestPath).trim()
+    if (!(raw ==~ /sha256:[a-fA-F0-9]{64}/)) {
+        error("recordJibSlsaL1: bad digest '${raw}'")
+    }
+    def imageSha256 = raw.substring('sha256:'.length()).toLowerCase()
+    env.GIT_COMMIT_SHA = env.GIT_COMMIT_SHA ?: sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+    env.GIT_REPO_URL = env.GIT_REPO_URL ?: sh(script: 'git remote get-url origin', returnStdout: true).trim()
+    writeFile file: (cfg.outputFile ?: 'provenance-l1.json'), text: """{
+  "slsa_level": "1",
+  "subject": { "name": "${imageName}", "digest": { "sha256": "${imageSha256}" } },
+  "source": { "repository": "${env.GIT_REPO_URL}", "commit": "${env.GIT_COMMIT_SHA}" },
+  "builder": { "id": "${env.JENKINS_URL}", "build_url": "${env.BUILD_URL}" }
+}
+"""
+    archiveArtifacts artifacts: (cfg.outputFile ?: 'provenance-l1.json'), fingerprint: true
+}
+```
+
+Call after existing `publish()` / Jib: `recordJibSlsaL1(imageName: env.JIB_IMAGE)`. Do not invent `publish()` internals in this lab.
 
 ---
 
 ## Troubleshooting
 
 **Pod never starts / `ErrImagePull` on the maven container**
-- Outside Proofpoint: the image path must be the public `maven:3.9-eclipse-temurin-17` — the `repocache.nonprod.ppops.net` mirror is internal-only and unreachable (it resolves to a sinkhole publicly).
-- Inside Proofpoint: use `repocache.nonprod.ppops.net/docker/maven:3.9-eclipse-temurin-17`; if the mirror does not yet cache this image, ask the registry team to whitelist/prefetch it — do not fall back to Docker Hub there.
+- Outside Proofpoint: use public `maven:3.9-eclipse-temurin-17`. `repocache.nonprod.ppops.net` does not resolve on the public internet.
+- Inside Proofpoint: use `repocache.nonprod.ppops.net/docker/maven:3.9-eclipse-temurin-17`; ask the registry team to prefetch rather than falling back to Docker Hub.
 
-**`ERROR: Failed to launch ...` with `pods is forbidden: User "system:serviceaccount:<ns>:<controller>" cannot list resource "pods" in ... namespace "..."` (403)**
-The pod YAML names a namespace the controller's Kubernetes service account has no RBAC for. Remove `metadata.namespace` (and `serviceAccountName`) from the pod YAML and let the controller's cloud defaults apply — on the Proofpoint controllers the CloudBees filters inject `cloudbees-agents`/`jenkins-agents` automatically. Only hardcode a namespace if the platform team has granted the controller RBAC there.
+**Jib cannot pull `eclipse-temurin:17-jre`**
+Same mirror rule as the Maven agent. Set `<from><image>repocache.nonprod.ppops.net/docker/eclipse-temurin:17-jre</image></from>` (or whatever tag their cache uses).
 
-**`Invalid option type "timestamps". Valid option types: [buildDiscarder, ...]` at pipeline startup**
-Someone added `timestamps()` to the `options {}` block on a controller without the Timestamper plugin — Declarative validates options against installed plugins at compile time, so the build fails before any stage runs. Remove the option or install Timestamper (both audited Proofpoint controllers have it; a scratch/test controller may not). The lab Jenkinsfile deliberately omits it.
+**`ERROR: Failed to launch ...` with `pods is forbidden` (403)**
+Remove `metadata.namespace` and `serviceAccountName` from the pod YAML.
 
-**`Could not update commit status ... "Resource not accessible by personal access token" 403`**
-The GitHub token cannot write commit statuses. This does not fail the build — it only stops CloudBees CI posting ✓/✗ back to GitHub. That exact message means a **fine-grained** PAT is in use: grant it **Commit statuses: Read and write** on the repo (or use a classic PAT with the full `repo` scope as in step 1.1). A classic PAT missing `repo:status` produces a plain 403 with the same fix.
+**`Jib digest file missing`**
+Build did not run `jib:buildTar` or `jib:build`, or Jib `outputPaths.digest` was overridden to another path. Confirm `target/jib-image.digest` in the workspace.
+
+**`Unexpected Jib digest`**
+File is empty, has a trailing path, or is `image@sha256:…` (not what current Jib writes). This lab expects exactly `sha256:` + 64 hex.
+
+**Provenance `sha256` does not match the registry**
+You hashed the digest **file** (plugin or `sha256sum target/jib-image.digest`). Read the file contents instead.
+
+**`AccessDeniedException` writing under `target/`**
+Write `provenance-l1.json` at the workspace root. Maven created `target/` as root; `jnlp` cannot mkdir there.
 
 **`./mvnw: Permission denied`**
 `git update-index --chmod=+x mvnw && git commit -m "make mvnw executable" && git push`
 
-**`No such DSL method 'provenanceRecorder'`**
-The SLSA Provenance Attestation plugin is not installed on this controller (§3.0). On CasC-managed controllers, also confirm `slsa` is in the plugin catalog — otherwise Beekeeper can remove it at the next bundle reload.
-
-**`AccessDeniedException: .../target/slsa` (or any path under `target/`) from `provenanceRecorder`**
-The recorder runs in the jnlp container as user `jenkins`, but `target/` was created by the maven container running as root — the plugin cannot `mkdirs` inside it. Set `targetDirectory` to a workspace-root path (`slsa`, as in §3.2), which the jnlp user owns. The same uid mismatch applies to any step outside `container('maven')` that writes under `target/`.
-
-**`[slsa] - build not successful, not generating provenance attestations` (and the follow-on archive step fails with `'slsa/*.intoto.jsonl' doesn't match anything`)**
-The plugin only generates attestations when `run.getResult()` is already `SUCCESS`, and in a running Pipeline the result is `null` until the build ends. Add `script { currentBuild.result = 'SUCCESS' }` immediately before `provenanceRecorder` (as in §3.2). This is safe — Jenkins only allows the result to be downgraded afterward, so later failures still fail the build.
-
-**No `.intoto.jsonl` produced, or `multiple.intoto.jsonl` instead of one per JAR**
-The `artifactFilter` glob is workspace-relative and must match after the `Build` stage has produced the JAR. One matching file → `<jar-name>.intoto.jsonl`; several matches → a combined `multiple.intoto.jsonl`. Tighten the glob if you want one attestation per artifact.
-
-**Attestation shows the wrong repo or no source info**
-The plugin only supports the Git SCM provider — it reads the repo URL and commit from the build's git checkout. Ensure the job checks out via `checkout scm` (Multibranch does) rather than a shallow custom fetch.
-
-**Maven cannot resolve `cyclonedx-maven-plugin`**
-The agent is not using the Artifactory mirror. Check `~/.m2/settings.xml` provisioning (config-file-provider is installed if a managed settings file is preferred: `withMaven` or `configFileProvider` can inject it).
+**Maven cannot resolve `jib-maven-plugin` or `cyclonedx-maven-plugin`**
+The agent is not using the Artifactory / `repocache` Maven mirror. Check `~/.m2/settings.xml` (`config-file-provider` is installed on the audited controllers).
 
 **Builds queue forever on the EC2 variant**
-The label must match an `ec2-instances-cloud` template exactly (labels in the support bundle are anonymized — read the real ones from **Manage Jenkins → Clouds → ec2-instances-cloud**).
+The label must match an `ec2-instances-cloud` template exactly (labels in the support bundle are anonymized).

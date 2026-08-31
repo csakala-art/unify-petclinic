@@ -35,6 +35,9 @@
     <maven-checkstyle.version>3.6.0</maven-checkstyle.version>
     <nohttp-checkstyle.version>0.0.11</nohttp-checkstyle.version>
     <spring-format.version>0.0.47</spring-format.version>
+    <!-- Jib: no Docker daemon. Lab uses jib:buildTar so target/jib-image.digest is written without a registry push. Override -Djib.to.image=... when you jib:build to a real registry. -->
+    <jib-maven-plugin.version>3.5.2</jib-maven-plugin.version>
+    <jib.to.image>spring-petclinic:4.0.0-SNAPSHOT</jib.to.image>
   </properties>
 
   <dependencies>
@@ -309,6 +312,20 @@
         <?m2e ignore?>
         <groupId>org.cyclonedx</groupId>
         <artifactId>cyclonedx-maven-plugin</artifactId>
+      </plugin>
+      <!-- Container image without a local Docker daemon (Proofpoint Jib pattern). -->
+      <plugin>
+        <groupId>com.google.cloud.tools</groupId>
+        <artifactId>jib-maven-plugin</artifactId>
+        <version>${jib-maven-plugin.version}</version>
+        <configuration>
+          <from>
+            <image>eclipse-temurin:17-jre</image>
+          </from>
+          <to>
+            <image>${jib.to.image}</image>
+          </to>
+        </configuration>
       </plugin>
     </plugins>
   </build>

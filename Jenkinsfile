@@ -1,6 +1,6 @@
-// SLSA Level 1 POC — complete Jenkinsfile (see SLSA-L1-POC-Proofpoint.md §3.3)
-// Rename to "Jenkinsfile" at the repo root of the spring-petclinic fork.
-// Requires on the controller: SLSA Provenance Attestation plugin (id: slsa).
+// SLSA Level 1 POC — container/Jib (see SLSA-L1-POC.md Lab 3)
+// No Docker daemon. jib:buildTar writes target/jib-image.digest (image manifest digest).
+// Do not point the slsa plugin at that file — it would hash the text file, not the image.
 pipeline {
     agent {
         kubernetes {
@@ -28,6 +28,11 @@ spec:
         }
     }
 
+    environment {
+        // Must match pom.xml <jib.to.image> — this is the provenance subject name.
+        JIB_IMAGE = 'spring-petclinic:4.0.0-SNAPSHOT'
+    }
+
     options {
         timeout(time: 30, unit: 'MINUTES')
         disableConcurrentBuilds()
@@ -49,9 +54,8 @@ spec:
         stage('Build') {
             steps {
                 container('maven') {
-                    // makeAggregateBom invoked explicitly so it works with or
-                    // without the plugin being declared in the app's pom.xml
-                    sh './mvnw -B -DskipTests package org.cyclonedx:cyclonedx-maven-plugin:2.8.0:makeAggregateBom'
+                    // package + SBOM, then Jib tarball (writes target/jib-image.digest without a registry)
+                    sh './mvnw -B -DskipTests package org.cyclonedx:cyclonedx-maven-plugin:2.8.0:makeAggregateBom jib:buildTar'
                 }
             }
         }
@@ -71,9 +75,7 @@ spec:
 
         stage('Archive') {
             steps {
-                // fingerprint: true records the artifact hash in the Jenkins
-                // fingerprint database — traceable across jobs via copyartifact
-                archiveArtifacts artifacts: 'target/spring-petclinic-*.jar', fingerprint: true
+                archiveArtifacts artifacts: 'target/jib-image.digest', fingerprint: true
                 archiveArtifacts artifacts: 'target/bom.json, target/bom.xml', allowEmptyArchive: true
             }
         }
@@ -81,18 +83,40 @@ spec:
         stage('SLSA L1 Provenance') {
             steps {
                 script {
-                    // provenanceRecorder generates attestations only when the build
-                    // result is already SUCCESS; mid-pipeline it is still null, so
-                    // set it explicitly (Jenkins only allows it to worsen afterward)
-                    currentBuild.result = 'SUCCESS'
+                    def digestPath = 'target/jib-image.digest'
+                    if (!fileExists(digestPath)) {
+                        error("Jib digest file missing: ${digestPath}. The Build stage must run jib:buildTar or jib:build first.")
+                    }
+                    def raw = readFile(digestPath).trim()
+                    if (!(raw ==~ /sha256:[a-fA-F0-9]{64}/)) {
+                        error("Unexpected Jib digest (want sha256: plus 64 hex chars): '${raw}'")
+                    }
+                    def imageSha256 = raw.substring('sha256:'.length()).toLowerCase()
+                    def imageName = (env.JIB_IMAGE ?: '').replace('\\', '\\\\').replace('"', '\\"')
+                    def repoUrl = (env.GIT_REPO_URL ?: '').replace('\\', '\\\\').replace('"', '\\"')
+                    def commit = (env.GIT_COMMIT_SHA ?: '').replace('\\', '\\\\').replace('"', '\\"')
+                    def builderId = (env.JENKINS_URL ?: '').replace('\\', '\\\\').replace('"', '\\"')
+                    def buildUrl = (env.BUILD_URL ?: '').replace('\\', '\\\\').replace('"', '\\"')
+                    def provenance = """{
+  "slsa_level": "1",
+  "subject": {
+    "name": "${imageName}",
+    "digest": { "sha256": "${imageSha256}" }
+  },
+  "source": {
+    "repository": "${repoUrl}",
+    "commit": "${commit}"
+  },
+  "builder": {
+    "id": "${builderId}",
+    "build_url": "${buildUrl}"
+  }
+}
+"""
+                    writeFile file: 'provenance-l1.json', text: provenance
+                    echo "SLSA L1 subject ${env.JIB_IMAGE} sha256:${imageSha256}"
                 }
-                // targetDirectory is workspace-root 'slsa', NOT 'target/slsa':
-                // the recorder runs in the jnlp container as user 'jenkins',
-                // while the maven container created target/ as root — mkdirs
-                // under target/ fails with AccessDeniedException
-                provenanceRecorder artifactFilter: 'target/spring-petclinic-*.jar',
-                                   targetDirectory: 'slsa'
-                archiveArtifacts artifacts: 'slsa/*.intoto.jsonl', fingerprint: true
+                archiveArtifacts artifacts: 'provenance-l1.json', fingerprint: true
             }
         }
 
