@@ -138,6 +138,22 @@ spec:
             }
         }
 
+        stage('Deploy to Production') {
+            when { branch 'main' }
+            steps { echo "Simulated deploy of ${env.ARTIFACT_ID}" }
+            post {
+                success {
+                    registerDeployedArtifactMetadata(
+                        artifactId: env.ARTIFACT_ID,
+                        artifactUrl: env.ARTIFACT_URL,
+                        targetEnvironment: 'Production',
+                        labels: "deployed,deployment-${BUILD_NUMBER}",
+                        allowNoMatchingComponent: false
+                    )
+                }
+            }
+        }
+
     }
 
     post {
