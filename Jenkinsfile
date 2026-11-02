@@ -78,6 +78,24 @@ spec:
                 archiveArtifacts artifacts: 'target/jib-image.digest', fingerprint: true
                 archiveArtifacts artifacts: 'target/bom.json, target/bom.xml', allowEmptyArchive: true
             }
+            post {
+                success {
+                    script {
+                        def digest = readFile('target/jib-image.digest').trim()   // sha256:<64 hex>
+                        def artifactUrl = "${BUILD_URL}artifact/target/jib-image.digest"
+                        env.ARTIFACT_ID = registerBuildArtifactMetadata(
+                            name: 'spring-petclinic',
+                            url: artifactUrl,
+                            version: "4.0.0-SNAPSHOT-${env.GIT_COMMIT_SHA.take(7)}",
+                            type: 'Docker',
+                            digest: digest,
+                            label: "build-${BUILD_NUMBER},${BRANCH_NAME}"
+                        )
+                        env.ARTIFACT_URL = artifactUrl
+                        echo "Artifact ID: ${env.ARTIFACT_ID}"
+                    }
+                }
+            }
         }
 
         stage('SLSA L1 Provenance') {
